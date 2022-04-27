@@ -18,23 +18,31 @@ package me.zhengjie.utils;
 import cn.hutool.core.io.IoUtil;
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.poi.excel.BigExcelWriter;
+import cn.hutool.poi.excel.ExcelReader;
 import cn.hutool.poi.excel.ExcelUtil;
+import io.swagger.annotations.ApiModelProperty;
+import me.zhengjie.annotation.IgnoreField;
+import me.zhengjie.base.ImportExportDefaultHandler;
+import me.zhengjie.base.ImportExportHandlerFactory;
 import me.zhengjie.exception.BadRequestException;
+import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.util.IOUtils;
+import org.apache.poi.xssf.streaming.SXSSFCell;
+import org.apache.poi.xssf.streaming.SXSSFRow;
 import org.apache.poi.xssf.streaming.SXSSFSheet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.multipart.MultipartFile;
+
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.*;
+import java.lang.reflect.Field;
 import java.security.MessageDigest;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * File工具类，扩展 hutool 工具包
@@ -43,9 +51,9 @@ import java.util.Map;
  * @date 2018-12-27
  */
 public class FileUtil extends cn.hutool.core.io.FileUtil {
-
+    
     private static final Logger log = LoggerFactory.getLogger(FileUtil.class);
-
+    
     /**
      * 系统临时目录
      * <br>
@@ -71,19 +79,19 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
      * 定义KB的计算常量
      */
     private static final int KB = 1024;
-
+    
     /**
      * 格式化小数
      */
     private static final DecimalFormat DF = new DecimalFormat("0.00");
-
+    
     public static final String IMAGE = "图片";
     public static final String TXT = "文档";
     public static final String MUSIC = "音乐";
     public static final String VIDEO = "视频";
     public static final String OTHER = "其他";
-
-
+    
+    
     /**
      * MultipartFile转File
      */
@@ -103,7 +111,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return file;
     }
-
+    
     /**
      * 获取文件扩展名，不带 .
      */
@@ -116,7 +124,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return filename;
     }
-
+    
     /**
      * Java文件操作 获取不带扩展名的文件名
      */
@@ -129,7 +137,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return filename;
     }
-
+    
     /**
      * 文件大小转换
      */
@@ -149,7 +157,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return resultSize;
     }
-
+    
     /**
      * inputStream 转 File
      */
@@ -175,7 +183,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return file;
     }
-
+    
     /**
      * 将文件名解析成文件的上传路径
      */
@@ -206,6 +214,18 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
     }
 
     /**
+     * 导入excel(只读取第一张表格)
+     */
+    public static List<Map<String, Object>> importExcel(MultipartFile file) throws IOException {
+        List<Map<String, Object>> list = new ArrayList<>();
+        ExcelReader excelReader= ExcelUtil.getReader(file.getInputStream());
+        excelReader.setSheet(0);
+        int rowCount=excelReader.getRowCount();
+        list= excelReader.read(0,1,rowCount);
+        return list;
+    }
+
+    /**
      * 导出excel
      */
     public static void downloadExcel(List<Map<String, Object>> list, HttpServletResponse response) throws IOException {
@@ -219,6 +239,8 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         sheet.trackAllColumnsForAutoSizing();
         //列宽自适应
         writer.autoSizeColumnAll();
+        //列宽自适应支持中文单元格
+        sizeChineseColumn(sheet, writer);
         //response为HttpServletResponse对象
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8");
         //test.xls是弹出下载对话框的文件名，不能为中文，中文请自行编码
@@ -231,6 +253,138 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         IoUtil.close(out);
     }
 
+    /**
+     * 导出excel
+     */
+    public static void downloadExcel(Iterable<?> iterable, HttpServletResponse response) throws IOException, NoSuchFieldException, IllegalAccessException {
+        downloadExcel(iterable, null, response);
+    }
+
+    public static void downloadExcel(Iterable<?> iterable, Map<String, String> alias, HttpServletResponse response) throws IOException, NoSuchFieldException, IllegalAccessException {
+        downloadExcel(iterable, alias, response, ImportExportDefaultHandler::new);
+    }
+
+    /**
+     * 导出excel
+     */
+    public static void downloadExcel(Iterable<?> iterable, Map<String, String> alias, HttpServletResponse response, ImportExportHandlerFactory factory) throws IOException, NoSuchFieldException, IllegalAccessException {
+
+        factory.doIt().handle(iterable);
+
+        String tempPath = SYS_TEM_DIR + IdUtil.fastSimpleUUID() + ".xlsx";
+        File file = new File(tempPath);
+        BigExcelWriter writer = ExcelUtil.getBigWriter(file);
+
+        //设置字段别名
+        writer.setHeaderAlias(alias);
+        writer.setOnlyAlias(true);
+
+        // 一次性写出内容，使用默认样式，强制输出标题
+        writer.write(iterable, true);
+
+        SXSSFSheet sheet = (SXSSFSheet)writer.getSheet();
+        //上面需要强转SXSSFSheet  不然没有trackAllColumnsForAutoSizing方法
+        sheet.trackAllColumnsForAutoSizing();
+        //列宽自适应
+        writer.autoSizeColumnAll();
+        //列宽自适应支持中文单元格
+        sizeChineseColumn(sheet, writer);
+        //response为HttpServletResponse对象
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8");
+        //test.xls是弹出下载对话框的文件名，不能为中文，中文请自行编码
+        response.setHeader("Content-Disposition", "attachment;filename=file.xlsx");
+        ServletOutputStream out = response.getOutputStream();
+        // 终止后删除临时文件
+        file.deleteOnExit();
+        writer.flush(out, true);
+        //此处记得关闭输出Servlet流
+        IoUtil.close(out);
+    }
+
+    /**
+     * 映射实体类字段的别名, 默认属性名为key
+     * @param target 待映射的对象
+     * @return 映射结果
+     */
+    public static Map<String, String> createFieldAlias(Class<?> target){
+        return createFieldAlias(target, false);
+    }
+
+    /**
+     * 映射实体类字段的别名
+     * @param target 待映射对象
+     * @param isInversion 是否反转映射，true 属性名作为value；false 属性名作为key
+     * @return 映射结果
+     */
+    public static Map<String, String> createFieldAlias(Class<?> target, boolean isInversion){
+        final Field[] fields = target.getDeclaredFields();
+        Map<String, String> map = new LinkedHashMap<>();
+
+        for (Field field : fields) {
+            final boolean accessible = field.isAccessible();
+            field.setAccessible(true);
+
+            final ApiModelProperty fieldAnnotation = field.getAnnotation(ApiModelProperty.class);
+            if (field.getAnnotation(IgnoreField.class) == null) {
+                if (fieldAnnotation != null){
+                    if (isInversion)
+                        map.put(fieldAnnotation.value(), field.getName());
+                    else
+                        map.put(field.getName(), fieldAnnotation.value());
+                }
+            }
+            field.setAccessible(accessible);
+        }
+        return map;
+    }
+
+    /**
+     * 将excel文件映射为实体类
+     * @param file 待解析的excel文件
+     * @param alias 别名，key为excel标题行
+     * @param type 映射成的实体类类型
+     * @return 实体类集合
+     */
+    public static <T> List<T> mapExcelToBean(File file, Map<String, String> alias, Class<T> type) throws NoSuchFieldException, IllegalAccessException {
+        return mapExcelToBean(file, alias, type, ImportExportDefaultHandler::new);
+    }
+
+    public static <T> List<T> mapExcelToBean(File file, Map<String, String> alias, Class<T> type, ImportExportHandlerFactory factory) throws NoSuchFieldException, IllegalAccessException {
+        ExcelReader reader = ExcelUtil.getReader(file);
+        reader.setHeaderAlias(alias);
+        final List<T> result = reader.readAll(type);
+        factory.doIt().handle(result); //后置处理结果
+        return result;
+    }
+
+
+    /**
+     * 自适应宽度(中文支持)
+     */
+    private static void sizeChineseColumn(SXSSFSheet sheet, BigExcelWriter writer) {
+        for (int columnNum = 0; columnNum < writer.getColumnCount(); columnNum++) {
+            int columnWidth = sheet.getColumnWidth(columnNum) / 256;
+            for (int rowNum = 0; rowNum < sheet.getLastRowNum(); rowNum++) {
+                SXSSFRow currentRow;
+                if (sheet.getRow(rowNum) == null) {
+                    currentRow = sheet.createRow(rowNum);
+                } else {
+                    currentRow = sheet.getRow(rowNum);
+                }
+                if (currentRow.getCell(columnNum) != null) {
+                    SXSSFCell currentCell = currentRow.getCell(columnNum);
+                    if (currentCell.getCellTypeEnum() == CellType.STRING) {
+                        int length = currentCell.getStringCellValue().getBytes().length;
+                        if (columnWidth < length) {
+                            columnWidth = length;
+                        }
+                    }
+                }
+            }
+            sheet.setColumnWidth(columnNum, columnWidth * 256);
+        }
+    }
+    
     public static String getFileType(String type) {
         String documents = "txt doc pdf ppt pps xlsx xls docx";
         String music = "mp3 wav wma mpa ram ra aac aif m4a";
@@ -248,15 +402,15 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
             return OTHER;
         }
     }
-
+    
     public static void checkSize(long maxSize, long size) {
         // 1M
         int len = 1024 * 1024;
         if (size > (maxSize * len)) {
-            throw new BadRequestException("文件超出规定大小:" + maxSize + "MB");
+            throw new BadRequestException("文件超出规定大小");
         }
     }
-
+    
     /**
      * 判断两个文件是否相同
      */
@@ -268,14 +422,14 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return false;
     }
-
+    
     /**
      * 判断两个文件是否相同
      */
     public static boolean check(String file1Md5, String file2Md5) {
         return file1Md5.equals(file2Md5);
     }
-
+    
     private static byte[] getByte(File file) {
         // 得到文件长度
         byte[] b = new byte[(int) file.length()];
@@ -295,7 +449,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return b;
     }
-
+    
     private static String getMd5(byte[] bytes) {
         // 16进制字符
         char[] hexDigits = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
@@ -317,7 +471,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
         }
         return null;
     }
-
+    
     /**
      * 下载文件
      *
@@ -349,7 +503,7 @@ public class FileUtil extends cn.hutool.core.io.FileUtil {
             }
         }
     }
-
+    
     public static String getMd5(File file) {
         return getMd5(getByte(file));
     }
